@@ -1,0 +1,99 @@
+#!/bin/bash
+#===========================================
+#   文件名称：p_monitor
+#   创 建 者：ZeQun
+#   创建日期：2017年04月25日
+#   描    述：
+#   Copyright (C) 2017 All rights reserved.
+#===========================================
+
+# chkconfig:	2345 99 20
+# description:	crond runs on 2345 90 60 , this script should shutdown before \
+#		crond stopped, and startup after crond started.
+
+INTERVAL=10			#间隔时间
+P_PID=/var/run/p_monitor.pid
+
+
+function crond(){
+
+	cron_pid=$(</var/run/crond.pid)
+	if [[ "$cron_pid"x != ""x ]] && [ -d /proc/$cron_pid ]
+	then
+		return
+	else
+		/etc/init.d/crond start
+	fi
+
+}
+
+function check_process(){
+
+	timestamp=$(date +%s)
+	result=$(echo "$INTERVAL - $timestamp % $INTERVAL"|bc)	
+	if [ $result -eq 10 ]
+	then
+		for func in $@
+		do
+			$func 
+			sleep 1
+		done	
+	else
+		sleep $result
+
+	fi
+
+}
+
+function main(){
+
+	while true
+	do
+		check_process $@
+	done
+
+}
+
+function p_start(){
+
+	if [ $UID -ne 0 ]
+	then
+		echo "User has no privilege"
+		exit 7
+	fi
+	if [ -f $P_PID ]
+	then
+		kill -9 $(cat $P_PID)
+		rm -f $P_PID
+	fi
+	main crond &
+	ps -e|grep p_monitor|tail -n 1|awk '{print $1}' > $P_PID
+	echo "Process monitor started."
+
+}
+
+function p_stop(){
+
+	kill -9 $(<$P_PID) > /dev/null 2>&1
+	[ -f $P_PID ] && rm -f $P_PID
+	echo "Process monitor stopped"
+}
+
+case "$1" in
+	start)
+		p_start && exit 0
+		$1
+		;;
+	stop)
+		p_stop && exit 0
+		$1
+		;;
+	restart)
+		p_stop && p_start && exit 0
+		$1
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 2
+esac
+exit $?
