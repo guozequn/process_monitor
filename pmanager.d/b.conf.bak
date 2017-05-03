@@ -1,0 +1,20 @@
+####################
+#
+# EXAMPLE.CONF
+#
+####################
+ 
+# Progress name
+PROGRESS_NAME=""
+
+# The method to show progress's PID
+SHOW_METHOD=""
+
+# The method to start progress 
+REUP_METHOD=""
+
+# Max Retry Times
+RETRY_TIMES=""
+
+# Retry Interval, Seconds only
+RETRY_INTER=""

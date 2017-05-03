@@ -1,0 +1,178 @@
+#!/bin/bash
+#===========================================
+#   文件名称：pmanager
+#   创 建 者：ZeQun
+#   创建日期：2017年04月25日
+#   描    述：
+#   Copyright (C) 2017 All rights reserved.
+#===========================================
+
+. /etc/rc.d/init.d/functions
+
+#exec_file=/usr/bin/pmanager
+#conf_file=/etc/pmanager/pmanager.conf
+
+prog="pmanager"
+exec_file=/letv/script/process_monitor/pmanager
+lock_file=/var/lock/sybsys/$prog
+conf_file=/letv/script/process_monitor/pmanager.conf
+
+function normal_check() {
+
+	# 普通检查，判断配置文件是否正确
+
+	[ -x $exec_file ] || echo "Pmanager not exist" || exit 5
+	if [ -f $conf_file ] ;then
+		source $conf_file > /dev/null 2>&1
+		[ $? -ne 0 ] && echo "Config file has error" && exit 7
+		if [ "$ENABLE_DIR" = "True" ]
+		then
+			[ ! -d "$P_CONF_DIR" ] && echo "Pmanager.d not exist" && exit 6
+			for i in $P_CONF_DIR/*.conf
+			do
+				check_conf $i
+			done
+		fi
+	else
+		echo "Pmanager config not exist" 
+		exit 6
+	fi
+
+
+}
+
+function check_conf() {
+
+	#check crond
+
+	while read line
+	do
+		[[ $line == \#* ]] && continue
+		[[ $line != [A-Z]* ]] && continue
+		value=$(echo $line |awk -F\" '{print $2}')
+		[ "$value"x = ''x ] && echo -e "Config file has error!\n$1: $line" && exit 7 
+	done < $1
+
+}
+
+function crond() {
+
+	#monit crond
+
+	cron_pid=$(</var/run/crond.pid)
+	if [[ "$cron_pid"x != ""x ]] && [ -d /proc/$cron_pid ] ;then
+		return
+	else
+		/etc/init.d/crond start
+	fi
+
+}
+
+function multi() {
+
+	# this will work on P_CONF_DIR set to True
+	
+	for file in $(ls $P_CONF_DIR/*.conf) ;do
+		source $file > /dev/null 2>&1
+		[ $? -ne 0 ] && echo "$file has error" && exit 7
+
+		# 排除非Active状态服务
+		[ "$P_ACTIVATED" = "no" ] && continue
+
+		# 排除标记为Error的服务
+
+		echo ${errlist[*]} |grep -wq $PROGRESS_NAME && break
+
+		result=$(grep SHOW_METHOD $file |awk -F= '{print $2}'|tr -d \" |bash|wc -l)
+		[ $result -eq $SHOW_RESULT ] && continue
+		grep SHUT_METHOD $file |awk -F= '{print $2}'|tr -d \" |bash > /dev/null 2>&1
+		logger "$PROGRESS_NAME" "Error" "Process num doesn't match"
+		erstat $PROGRESS_NAME "add"
+		rescure $file &
+	done
+
+}
+
+function erstat() {
+	
+	#mark or unmark the process
+
+	er_prog=$1
+	er_exec=$2
+	er_len=${#errlist[@]}
+	[ "$2" = "add" ] && errlist[echo "$err_len + 1"|bc]=$er_prog
+	#&& echo ${errlist[*]}
+	[ "$2" = "del" ] && unset errlist[$er_prog]
+}
+
+function rescure() {
+	
+	#Reup the prog, if success ,then remove if from error list.
+
+	source $1
+	while (($RETRY_TIMES > 0)) ;do
+		grep REUP_METHOD $1 |awk -F= '{print $2}'|tr -d \" |bash > /dev/null 2>&1
+		sleep $RETRY_INTER
+		result=$(grep SHOW_METHOD $1 |awk -F= '{print $2}'|tr -d \" |bash|wc -l)
+		if [ $result -eq $SHOW_RESULT ] ;then
+		       logger $PROGRESS_NAME "OK" "Restart Progress success."
+		       erstat $PROGRESS_NAME "del"
+		       break
+		fi
+		logger $PROGRESS_NAME "Error" "Restart Progress failed."
+		RETRY_TIMES=$(echo "$RETRY_TIMES - 1"|bc)
+	done 
+
+}
+
+function logger() {
+	
+	progname="$1"
+	prostat="$2"
+	detail="$3"
+	recordtime=$(date +"%Y-%m-%d %H:%M:%S")
+	[ ! -f $P_LOG_FILE ] && touch $P_LOG_FILE
+	echo -e "$recordtime $progname $prostat $detail" >> $P_LOG_FILE
+
+}
+
+function check_process() {
+
+	timestamp=$(date +%s)
+	result=$(echo "$INTERVAL - $timestamp % $INTERVAL"| bc)	
+	if [ $result -eq 10 ] ;then
+		for func in $@ ;do
+			$func
+		done	
+		sleep 1
+	else
+		sleep $result
+
+	fi
+
+}
+
+function main() {
+
+	normal_check
+	running=$(status -p $P_PID_FILE|echo $?)
+	errlist=()
+	
+	[ $running -ne 0 ] && echo "Pmonitor is already running" && exit 8
+	ps -ef |grep pmanager|grep -v grep|awk '{print $2}' > $P_PID_FILE
+
+	if [ "$ENABLE_DIR" = "False" ] ;then
+		while : ;do
+			check_process crond
+		done
+	elif [ "$ENABLE_DIR" = "True" ] ;then
+		while : ;do
+			check_process crond multi
+			#erstat "opssystem" "add"
+			#sleep 10
+		done
+	fi
+
+}
+
+main
